@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermes Desktop portable build update service
+After=network.target
+
+[Service]
+EnvironmentFile=-%h/.config/hermes-desktop-pack/config.env
+ExecStart=/usr/bin/python3 %h/bin/hermes-desktop-update-server.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

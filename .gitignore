@@ -1,0 +1,10 @@
+# Local config with real hosts/paths — never commit
+config.env
+.env
+*.local
+
+# Build outputs
+hermes-desktop-artifacts/
+node_modules/
+release/
+*.asar

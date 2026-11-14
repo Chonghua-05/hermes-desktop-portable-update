@@ -1,0 +1,76 @@
+diff --git a/apps/desktop/src/app/updates-overlay.tsx b/apps/desktop/src/app/updates-overlay.tsx
+index 869f000ebd..97a475c0e1 100644
+--- a/apps/desktop/src/app/updates-overlay.tsx
++++ b/apps/desktop/src/app/updates-overlay.tsx
+@@ -39,6 +39,7 @@ import {
+   $backendUpdateChecking,
+   $backendUpdateStatus,
+   $desktopVersion,
++  $portableManifest,
+   $updateApply,
+   $updateChecking,
+   $updateOverlayOpen,
+@@ -56,6 +57,7 @@ import {
+ } from '@/store/updates'
+ 
+ import { DiscontinuedNotice } from './retirement-view'
++import { PortableUpdatePanel } from './portable-update-panel'
+ import { UpdateErrorReport } from './update-error-report'
+ 
+ function totalItems(groups: readonly CommitGroup[]) {
+@@ -321,6 +323,7 @@ function IdleView({
+   const { t } = useI18n()
+   const u = t.updates
+   const notes = useUpdateNotes(status, updateAvailable)
++  const portableManifest = useStore($portableManifest)
+ 
+   if (!status && checking) {
+     return (
+@@ -390,6 +393,13 @@ function IdleView({
+     )
+   }
+ 
++  // Portable packing-server build: the regular check failed because there is
++  // no upstream updater. When the packing server is reachable, offer its
++  // build+deploy flow instead of the "cannot reach the update server" dead end.
++  if (target === 'client' && (!status.supported || status.error === 'check-failed') && portableManifest) {
++    return <PortableUpdatePanel manifest={portableManifest} onRetryCheck={onRetryCheck} />
++  }
++
+   // Everything that is NOT the install pitch — unsupported, check error, and
+   // already-latest — is exactly the About page's state: render the shared
+   // hero + status card so the two surfaces cannot drift. The card owns the
+diff --git a/apps/desktop/src/store/updates.ts b/apps/desktop/src/store/updates.ts
+index a25f4d14c1..1ef13aea2f 100644
+--- a/apps/desktop/src/store/updates.ts
++++ b/apps/desktop/src/store/updates.ts
+@@ -19,6 +19,7 @@ import type {
+ } from '@/global'
+ import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
+ import { translateNow } from '@/i18n'
++import { fetchPortableManifest, type PortableManifest } from '@/lib/portable-updates'
+ import { persistString, storedString } from '@/lib/storage'
+ import { cloudOwnsUpdates, updateTargetFor } from '@/store/cloud-updates'
+ import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
+@@ -61,6 +62,9 @@ export const $updateChecking = atom<boolean>(false)
+ export const $updateOverlayOpen = atom<boolean>(false)
+ export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
+ 
++/** Packing-server manifest for the portable green build; set on failed regular checks. */
++export const $portableManifest = atom<PortableManifest | null>(null)
++
+ // Client and backend are independently updatable; each keeps its own state.
+ export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
+ export const $backendUpdateApply = atom<UpdateApplyState>(IDLE)
+@@ -643,6 +647,11 @@ export async function checkBackendUpdates({
+ export async function checkUpdates({ force = false }: UpdateCheckOptions = {}): Promise<DesktopUpdateStatus | null> {
+   const bridge = window.hermesDesktop?.updates
+ 
++  // The main process RESOLVES check-failed instead of rejecting, so a probe in
++  // the catch would never run. Probe on every client check; an unreachable
++  // packing server resolves null and the overlay keeps its native error card.
++  void fetchPortableManifest().then(manifest => $portableManifest.set(manifest))
++
+   if (!bridge || $updateChecking.get() || cloudOwnsUpdates('client')) {
+     return $updateStatus.get()
+   }
