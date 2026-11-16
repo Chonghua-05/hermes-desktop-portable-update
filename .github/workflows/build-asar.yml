@@ -1,0 +1,94 @@
+name: Build app.asar
+
+# Builds the portable Hermes Desktop bundle from an upstream tag and publishes
+# it as a release asset. Clients (Linux/Windows) resolve updates from
+# releases/latest, so no build machine or LAN service is involved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'upstream tag to pack (empty = newest stable vX.Y.Z)'
+        required: false
+        default: ''
+      publish:
+        description: 'publish a GitHub release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: NousResearch/hermes-agent
+    steps:
+      - name: Checkout packing repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Enable corepack
+        run: |
+          corepack enable
+          echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0" >> "$GITHUB_ENV"
+
+      - name: Clone upstream
+        run: |
+          git clone --filter=blob:none "https://github.com/$UPSTREAM_REPO.git" "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" log --oneline -1
+
+      - name: Build app.asar
+        env:
+          WORKSPACE: ${{ runner.temp }}/hermes-agent
+          ART: ${{ github.workspace }}/art
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          RELEASE_SLUG: ${{ github.repository }}
+        run: bash bin/build-hermes-desktop-asar.sh
+
+      - name: Stage release assets
+        id: stage
+        run: |
+          set -euo pipefail
+          TAG=$(jq -r .upstreamTag art/*/manifest.json | head -1)
+          REL="asar-$TAG"
+          echo "rel=$REL" >> "$GITHUB_OUTPUT"
+          mkdir -p release
+          cp "art/$TAG/app.asar" release/app.asar
+          cp "art/$TAG/manifest.json" release/manifest.json
+          cp bin/install-hermes-desktop-linux.sh release/install-hermes-desktop-linux.sh
+          ls -l release
+          echo "sha256: $(sha256sum release/app.asar | cut -d' ' -f1)"
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REL: ${{ steps.stage.outputs.rel }}
+        run: |
+          set -euo pipefail
+          if gh release view "$REL" >/dev/null 2>&1; then
+            gh release upload "$REL" release/* --clobber
+          else
+            gh release create "$REL" release/* \
+              --title "Hermes Desktop $REL" \
+              --notes "app.asar built from $UPSTREAM_REPO $(jq -r .upstreamTag release/manifest.json) by GitHub Actions.
+
+          Install (Linux, idempotent — re-run to update):
+          \`\`\`bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-hermes-desktop-linux.sh | bash
+          \`\`\`"
+          fi
+          gh release edit "$REL" --latest
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-asar-${{ steps.stage.outputs.rel }}
+          path: release/
+          retention-days: 14

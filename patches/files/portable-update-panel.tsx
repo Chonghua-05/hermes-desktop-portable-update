@@ -1,32 +1,23 @@
-import { useStore } from '@nanostores/react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { Loader } from '@/components/ui/loader'
-import { Progress } from '@/components/ui/progress'
 import {
   PORTABLE_BUILD_TAG,
+  PORTABLE_RELEASE_URL,
   comparePortableVersions,
-  fetchPortableStatus,
-  startPortableBuild,
-  type PortableManifest,
-  type PortableStatus
+  type PortableManifest
 } from '@/lib/portable-updates'
 import { setUpdateOverlayOpen } from '@/store/updates'
 
-const RUNNING_STATES = new Set(['building', 'deploying'])
-const TERMINAL_STATES = new Set(['done', 'error'])
-
-function formatLogTail(log: readonly string[]): string[] {
-  return log.slice(-4).filter(Boolean)
-}
+const INSTALL_COMMAND = `curl -fsSL ${PORTABLE_RELEASE_URL}/latest/download/install-hermes-desktop-linux.sh | bash`
 
 /**
  * Replacement for the "cannot reach the update server" dead end on the
- * portable (packing-server) build: compares the packing server's manifest
- * with the running version and drives the build+deploy+restart pipeline.
+ * portable build: the app.asar is built by GitHub Actions and published as a
+ * release asset, so this panel only compares versions and hands out the
+ * artifact — the client cannot rebuild itself.
  */
 export function PortableUpdatePanel({
   manifest,
@@ -35,37 +26,21 @@ export function PortableUpdatePanel({
   manifest: PortableManifest
   onRetryCheck: () => void
 }) {
-  const [status, setStatus] = useState<PortableStatus | null>(null)
-  const [starting, setStarting] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   // package.json version is meaningless (0.0.0); the build tag baked in at
   // pack time is the real identity of this portable build.
   const current = PORTABLE_BUILD_TAG
   const newer = comparePortableVersions(manifest.tag, current) > 0
 
-  useEffect(() => {
-    if (!status || TERMINAL_STATES.has(status.state)) {
-      return
-    }
+  const openRelease = () => {
+    void window.hermesDesktop?.openExternal?.(manifest.artifactUrl)
+  }
 
-    const timer = window.setInterval(() => {
-      void fetchPortableStatus().then(next => next && setStatus(next))
-    }, 2000)
-
-    return () => window.clearInterval(timer)
-  }, [status])
-
-  const running = status !== null && RUNNING_STATES.has(status.state)
-  const logTail = status ? formatLogTail(status.log) : []
-
-  const handleStart = () => {
-    setStarting(true)
-    void startPortableBuild().then(ok => {
-      setStarting(false)
-
-      if (ok) {
-        void fetchPortableStatus().then(s => s && setStatus(s))
-      }
+  const copyCommand = () => {
+    void navigator.clipboard?.writeText(INSTALL_COMMAND).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
     })
   }
 
@@ -74,9 +49,9 @@ export function PortableUpdatePanel({
       <div className="flex flex-col items-center gap-3 text-center">
         <BrandMark className="size-16" />
 
-        <DialogTitle className="text-center text-xl">客户端更新（打包服务器）</DialogTitle>
+        <DialogTitle className="text-center text-xl">客户端更新（GitHub）</DialogTitle>
         <DialogDescription className="max-w-prose text-center text-sm leading-5 text-muted-foreground">
-          此绿色版客户端由本机打包服务器构建与部署，不走官方更新通道。
+          此绿色版客户端由 GitHub Actions 构建并发布，不走官方更新通道。
         </DialogDescription>
       </div>
 
@@ -84,65 +59,43 @@ export function PortableUpdatePanel({
         <p className="text-muted-foreground">
           当前版本 <span className="font-medium text-foreground">{current ?? '未知'}</span>
           <span className="mx-1">·</span>
-          服务器版本 <span className="font-medium text-foreground">{manifest.tag}</span>
+          最新版本 <span className="font-medium text-foreground">{manifest.version || manifest.tag}</span>
         </p>
 
-        {!running && newer && <p className="text-primary font-medium">发现新版本，可一键构建并部署。</p>}
-        {!running && !newer && current !== null && (
+        {newer && <p className="text-primary font-medium">发现新版本，可下载后替换。</p>}
+        {!newer && current !== null && (
           <p className="text-muted-foreground">当前已是最新打包版本。</p>
         )}
       </div>
 
-      {running && (
-        <>
-          <div className="flex flex-col items-center gap-2 text-center">
-            <Loader className="size-10" label={status?.state === 'deploying' ? '部署中…' : '构建中…'} type="lemniscate-bloom" />
-            <p className="text-sm text-muted-foreground">
-              正在服务器上构建并部署到本机，完成后客户端将自动重启。
-            </p>
-          </div>
-          <Progress aria-label="更新进度" indeterminate size="lg" value={0} />
-        </>
-      )}
-
-      {logTail.length > 0 && (
-        <div className="max-h-24 overflow-hidden rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left font-mono text-[11px] leading-4 text-muted-foreground">
-          {logTail.map((line, index) => (
-            <div className="truncate" key={`${index}-${line}`}>
-              {line}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {status?.state === 'error' && (
-        <p className="max-w-prose text-center text-xs leading-5 text-red-500">
-          更新失败：{status.error ?? '未知错误'}
-        </p>
-      )}
-
-      {status?.state === 'done' && (
-        <p className="text-center text-sm text-primary font-medium">已部署 {status.tag ?? manifest.tag}，客户端正在重启…</p>
-      )}
+      <div className="grid gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left font-mono text-[11px] leading-4 text-muted-foreground">
+        <span className="text-foreground/70"># Linux（Arch/Fedora/Debian，重跑即更新）</span>
+        <span className="break-all">{INSTALL_COMMAND}</span>
+      </div>
 
       <div className="grid gap-2">
-        {!running && status?.state !== 'done' && newer && (
-          <Button className="font-semibold" disabled={starting} onClick={handleStart} size="lg">
-            {starting ? '启动中…' : '一键更新'}
+        {newer && (
+          <Button className="font-semibold" onClick={openRelease} size="lg">
+            打开下载页
           </Button>
         )}
 
-        {!running && (
-          <Button className="font-medium" onClick={onRetryCheck} type="button" variant="text">
-            重新检查
-          </Button>
-        )}
+        <Button className="font-medium" onClick={copyCommand} type="button" variant="secondary">
+          {copied ? '已复制' : '复制更新命令'}
+        </Button>
 
-        {status?.state === 'done' && (
-          <Button className="font-semibold" onClick={() => setUpdateOverlayOpen(false)} size="lg" variant="secondary">
-            完成
-          </Button>
-        )}
+        <Button className="font-medium" onClick={onRetryCheck} type="button" variant="text">
+          重新检查
+        </Button>
+
+        <Button
+          className="font-medium"
+          onClick={() => setUpdateOverlayOpen(false)}
+          type="button"
+          variant="text"
+        >
+          关闭
+        </Button>
       </div>
     </div>
   )

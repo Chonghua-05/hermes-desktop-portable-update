@@ -1,71 +1,71 @@
 /**
- * Portable-build update channel.
+ * Portable-build update channel (GitHub Releases).
  *
- * This build has no upstream updater: the packing server builds a release
- * tag, pushes app.asar to the Windows client over SSH and restarts it. The
- * overlay falls back here when the regular update bridge reports
- * `check-failed`.
+ * This build has no upstream updater: app.asar is built by GitHub Actions from
+ * an upstream tag and published as a release asset. The overlay falls back here
+ * when the regular update bridge reports `check-failed`.
  *
- * The server origin and this build's tag are generated at pack time into
- * ./portable-build-tag (see bin/build-hermes-desktop-asar.sh).
+ * PORTABLE_BUILD_TAG / PORTABLE_UPDATE_BASE / PORTABLE_RELEASE_URL are generated
+ * at pack time into ./portable-build-tag (bin/build-hermes-desktop-asar.sh or
+ * .github/workflows/build-asar.yml).
  */
-import { PORTABLE_BUILD_TAG, PORTABLE_UPDATE_BASE } from './portable-build-tag'
+import { PORTABLE_BUILD_TAG, PORTABLE_RELEASE_URL, PORTABLE_UPDATE_BASE } from './portable-build-tag'
 
-export { PORTABLE_BUILD_TAG, PORTABLE_UPDATE_BASE }
+export { PORTABLE_BUILD_TAG, PORTABLE_RELEASE_URL, PORTABLE_UPDATE_BASE }
 
 export interface PortableManifest {
+  /** Release tag, e.g. `asar-v0.23.1`. */
   tag: string
+  /** Upstream version, e.g. `0.23.1`. */
   version: string
   builtAt: string
   artifactUrl: string
 }
 
-export interface PortableStatus {
-  state: 'idle' | 'building' | 'deploying' | 'done' | 'error'
-  tag: string | null
-  log: readonly string[]
-  deployed: boolean
-  error: string | null
+interface GitHubRelease {
+  tag_name?: string
+  published_at?: string
+  assets?: { name?: string; browser_download_url?: string }[]
+}
+
+/** `asar-v0.23.1` / `v0.23.1` -> `0.23.1` */
+function stripTagPrefix(tag: string): string {
+  return tag.replace(/^asar-/, '').replace(/^v/, '')
 }
 
 export async function fetchPortableManifest(): Promise<PortableManifest | null> {
   try {
-    const res = await fetch(`${PORTABLE_UPDATE_BASE}/api/desktop-update/manifest`, {
-      signal: AbortSignal.timeout(4000)
+    const res = await fetch(PORTABLE_UPDATE_BASE, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(6000)
     })
 
-    return res.ok ? ((await res.json()) as PortableManifest) : null
+    if (!res.ok) {
+      return null
+    }
+
+    const release = (await res.json()) as GitHubRelease
+    const asset = release.assets?.find(entry => entry.name === 'app.asar')
+
+    if (!release.tag_name || !asset?.browser_download_url) {
+      return null
+    }
+
+    return {
+      tag: release.tag_name,
+      version: stripTagPrefix(release.tag_name),
+      builtAt: release.published_at ?? '',
+      artifactUrl: asset.browser_download_url
+    }
   } catch {
     return null
   }
 }
 
-export async function startPortableBuild(): Promise<boolean> {
-  try {
-    const res = await fetch(`${PORTABLE_UPDATE_BASE}/api/desktop-update/build`, { method: 'POST' })
-
-    return res.ok || res.status === 409
-  } catch {
-    return false
-  }
-}
-
-export async function fetchPortableStatus(): Promise<PortableStatus | null> {
-  try {
-    const res = await fetch(`${PORTABLE_UPDATE_BASE}/api/desktop-update/status`, {
-      signal: AbortSignal.timeout(4000)
-    })
-
-    return res.ok ? ((await res.json()) as PortableStatus) : null
-  } catch {
-    return null
-  }
-}
-
-/** Compare dotted versions ('v' prefix tolerated); <0 when a is older. */
+/** Compare dotted versions ('asar-'/'v' prefixes tolerated); <0 when a is older. */
 export function comparePortableVersions(a: string, b: string): number {
-  const pa = a.replace(/^v/, '').split('.').map(Number)
-  const pb = b.replace(/^v/, '').split('.').map(Number)
+  const pa = stripTagPrefix(a).split('.').map(Number)
+  const pb = stripTagPrefix(b).split('.').map(Number)
 
   for (let i = 0; i < 3; i++) {
     const delta = (pa[i] || 0) - (pb[i] || 0)
