@@ -73,9 +73,11 @@ cd apps/desktop
 corepack pnpm run build
 
 mkdir -p "$ART/$TAG"
+mkdir -p release/asar-src
 rm -rf release/asar-src/dist release/asar-src/package.json
 cp -r dist release/asar-src/dist
 cp package.json release/asar-src/package.json
+[ -d release/asar-src/dist ] || { echo "[build] dist missing, nothing to pack" >&2; exit 1; }
 corepack pnpm dlx @electron/asar pack release/asar-src "$ART/$TAG/app.asar"
 
 APP_VERSION="${TAG#v}"

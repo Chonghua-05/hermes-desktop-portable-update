@@ -38,6 +38,11 @@ jobs:
           corepack enable
           echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0" >> "$GITHUB_ENV"
 
+      - name: Install native build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libx11-dev libxtst-dev libxext-dev
+
       - name: Clone upstream
         run: |
           git clone --filter=blob:none "https://github.com/$UPSTREAM_REPO.git" "$RUNNER_TEMP/hermes-agent"
