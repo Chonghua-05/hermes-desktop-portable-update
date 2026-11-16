@@ -21,7 +21,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # node-pty has no Linux prebuild: it compiles against the runner's glibc,
+    # and a binary from a newer image fails to dlopen on older distros
+    # ("GLIBC_2.42 not found"). ubuntu-22.04 (glibc 2.35) keeps the artifact
+    # loadable from Debian 12 up.
+    runs-on: ubuntu-22.04
     env:
       UPSTREAM_REPO: NousResearch/hermes-agent
     steps:
@@ -70,6 +74,8 @@ jobs:
           cp bin/install-hermes-desktop-linux.sh release/install-hermes-desktop-linux.sh
           ls -l release
           echo "sha256: $(sha256sum release/app.asar | cut -d' ' -f1)"
+          PTY=$(find "art/$TAG/app.asar.unpacked" -name pty.node | head -1)
+          echo "pty.node glibc floor: $(objdump -T "$PTY" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
 
       - name: Publish release
         if: inputs.publish
