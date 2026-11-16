@@ -69,6 +69,15 @@ EOF
 
 corepack pnpm install --no-frozen-lockfile --ignore-scripts --config.engine-strict=false --filter ./apps/desktop...
 
+# --ignore-scripts leaves node-pty without its binary; the bundle copies
+# dist/node_modules/node-pty into app.asar, so it must be built here. NAPI
+# (node-addon-api) keeps the result valid across Node/Electron ABIs.
+corepack pnpm rebuild node-pty >/dev/null 2>&1 || true
+PTY_NODE="apps/desktop/node_modules/node-pty/build/Release/pty.node"
+[ -f "$PTY_NODE" ] || PTY_NODE="node_modules/node-pty/build/Release/pty.node"
+[ -f "$PTY_NODE" ] || { echo "[build] node-pty binary missing; the bundle would ship a broken terminal" >&2; exit 1; }
+echo "[build] node-pty: $PTY_NODE"
+
 cd apps/desktop
 corepack pnpm run build
 
