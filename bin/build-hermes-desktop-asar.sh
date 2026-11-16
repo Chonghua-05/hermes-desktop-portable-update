@@ -87,10 +87,18 @@ rm -rf release/asar-src/dist release/asar-src/package.json
 cp -r dist release/asar-src/dist
 cp package.json release/asar-src/package.json
 [ -d release/asar-src/dist ] || { echo "[build] dist missing, nothing to pack" >&2; exit 1; }
-corepack pnpm dlx @electron/asar pack release/asar-src "$ART/$TAG/app.asar"
+rm -rf "$ART/$TAG/app.asar.unpacked"
+# Native modules (.node) and node-pty's spawn-helper cannot be loaded from
+# inside the archive: they must live in app.asar.unpacked.
+corepack pnpm dlx @electron/asar pack release/asar-src "$ART/$TAG/app.asar" \
+  --unpack-dir "dist/node_modules"
+[ -d "$ART/$TAG/app.asar.unpacked/dist/node_modules/node-pty" ] \
+  || { echo "[build] app.asar.unpacked missing node-pty" >&2; exit 1; }
+tar -czf "$ART/$TAG/app.asar.unpacked.tar.gz" -C "$ART/$TAG" app.asar.unpacked
 
 APP_VERSION="${TAG#v}"
 SHA=$(sha256sum "$ART/$TAG/app.asar" | cut -d' ' -f1)
+UNPACKED_SHA=$(sha256sum "$ART/$TAG/app.asar.unpacked.tar.gz" | cut -d' ' -f1)
 cat > "$ART/$TAG/manifest.json" <<EOF
 {
   "tag": "asar-$TAG",
@@ -99,7 +107,10 @@ cat > "$ART/$TAG/manifest.json" <<EOF
   "builtAt": "$(date -uIseconds)",
   "sha256": "$SHA",
   "size": $(stat -c%s "$ART/$TAG/app.asar"),
-  "artifactUrl": "$PORTABLE_RELEASE_URL/latest/download/app.asar"
+  "unpackedSha256": "$UNPACKED_SHA",
+  "unpackedSize": $(stat -c%s "$ART/$TAG/app.asar.unpacked.tar.gz"),
+  "artifactUrl": "$PORTABLE_RELEASE_URL/latest/download/app.asar",
+  "unpackedUrl": "$PORTABLE_RELEASE_URL/latest/download/app.asar.unpacked.tar.gz"
 }
 EOF
 

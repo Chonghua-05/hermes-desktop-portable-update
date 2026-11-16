@@ -65,6 +65,7 @@ jobs:
           echo "rel=$REL" >> "$GITHUB_OUTPUT"
           mkdir -p release
           cp "art/$TAG/app.asar" release/app.asar
+          cp "art/$TAG/app.asar.unpacked.tar.gz" release/app.asar.unpacked.tar.gz
           cp "art/$TAG/manifest.json" release/manifest.json
           cp bin/install-hermes-desktop-linux.sh release/install-hermes-desktop-linux.sh
           ls -l release

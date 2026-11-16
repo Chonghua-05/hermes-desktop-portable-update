@@ -25,6 +25,7 @@ BIN_DIR="${BIN_DIR:-/usr/bin}"
 APPS_DIR="${APPS_DIR:-/usr/share/applications}"
 ELECTRON_VER="${ELECTRON_VER:-44.9.3}"
 ASAR_URL="${ASAR_URL:-https://github.com/$REPO_SLUG/releases/latest/download/app.asar}"
+UNPACKED_URL="${UNPACKED_URL:-https://github.com/$REPO_SLUG/releases/latest/download/app.asar.unpacked.tar.gz}"
 ASAR_MANIFEST_URL="${ASAR_MANIFEST_URL:-https://github.com/$REPO_SLUG/releases/latest/download/manifest.json}"
 ASAR_SHA256="${ASAR_SHA256-}"
 ICON_URL="${ICON_URL:-https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.23.1/apps/desktop/assets/icon.png}"
@@ -62,13 +63,19 @@ if [ -z "$ASAR_SHA256" ]; then
   # manifest 里带构建产物的 sha256，按它校验；拿不到就不校验
   ASAR_SHA256=$(curl -fsSL --connect-timeout 15 "$ASAR_MANIFEST_URL" 2>/dev/null \
     | sed -n 's/.*"sha256" *: *"\([0-9a-f]\{64\}\)".*/\1/p' | head -1)
+  UNPACKED_SHA256=$(curl -fsSL --connect-timeout 15 "$ASAR_MANIFEST_URL" 2>/dev/null \
+    | sed -n 's/.*"unpackedSha256" *: *"\([0-9a-f]\{64\}\)".*/\1/p' | head -1)
 fi
 case "$ASAR_URL" in
   http://*|https://*)
     curl -fL --retry 3 --connect-timeout 20 -o "$DEST/resources/app.asar.new" "$ASAR_URL" \
-      || die "asar 下载失败：$ASAR_URL" ;;
+      || die "asar 下载失败：$ASAR_URL"
+    # 原生模块（node-pty 等）必须在 app.asar.unpacked 里才能被加载
+    curl -fL --retry 3 --connect-timeout 20 -o "$DEST/resources/app.asar.unpacked.tar.gz.new" "$UNPACKED_URL" \
+      || die "app.asar.unpacked 下载失败：$UNPACKED_URL" ;;
   *)  [ -f "$ASAR_URL" ] || die "找不到 $ASAR_URL"
-      cp "$ASAR_URL" "$DEST/resources/app.asar.new" ;;
+      cp "$ASAR_URL" "$DEST/resources/app.asar.new"
+      if [ -f "$UNPACKED_URL" ]; then cp "$UNPACKED_URL" "$DEST/resources/app.asar.unpacked.tar.gz.new"; fi ;;
 esac
 size=$(stat -c%s "$DEST/resources/app.asar.new")
 [ "$size" -gt 1000000 ] || { rm -f "$DEST/resources/app.asar.new"; die "asar 太小($size)，来源不对"; }
@@ -78,6 +85,18 @@ if [ -n "$ASAR_SHA256" ]; then
   echo "      $size 字节，sha256 校验通过"
 else
   echo "      $size 字节（未取到校验值，跳过校验）"
+fi
+if [ -f "$DEST/resources/app.asar.unpacked.tar.gz.new" ]; then
+  if [ -n "${UNPACKED_SHA256-}" ]; then
+    ugot=$(sha256sum "$DEST/resources/app.asar.unpacked.tar.gz.new" | cut -d' ' -f1)
+    [ "$ugot" = "$UNPACKED_SHA256" ] || { rm -f "$DEST/resources/app.asar.unpacked.tar.gz.new"; die "unpacked 校验不匹配"; }
+  fi
+  rm -rf "$DEST/resources/app.asar.unpacked"
+  tar -xzf "$DEST/resources/app.asar.unpacked.tar.gz.new" -C "$DEST/resources" || die "unpacked 解包失败"
+  rm -f "$DEST/resources/app.asar.unpacked.tar.gz.new"
+  [ -d "$DEST/resources/app.asar.unpacked" ] || die "解包后没有 app.asar.unpacked"
+  # node-pty 的 spawn-helper 需要可执行位
+  find "$DEST/resources/app.asar.unpacked" -name 'spawn-helper' -exec chmod 755 {} + 2>/dev/null
 fi
 mv -f "$DEST/resources/app.asar.new" "$DEST/resources/app.asar"
 
