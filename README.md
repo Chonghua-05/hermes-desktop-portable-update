@@ -86,9 +86,13 @@ bin/build-hermes-desktop-asar.sh v0.23.1    # 指定 tag
 
 绿色版没有官方 updater，设置里的「检查更新」必然报 `check-failed`。补丁在此处接管：
 
-- 拉 `https://api.github.com/repos/<owner>/<repo>/releases/latest`，取 `tag_name` 与 `app.asar` 附件；
-- 比较后果显示当前版本 / 最新版本，给「打开下载页」和「复制更新命令」；
-- 客户端不自建、不自部署——构建发生在 CI，安装/更新由上面那条命令完成。
+- 拉 `releases/latest/download/manifest.json`（含 `sha256` / `unpackedSha256` / 两个资产 URL），拿不到时退回 release API 只做版本比较；
+- 显示当前版本 / 最新版本，有新版时给**一键更新**按钮，另有「打开下载页」「复制更新命令」兜底；
+- **一键更新**：主进程下载 `app.asar` + `app.asar.unpacked.tar.gz`（边下边算 sha256，URL 限定 github 域），校验通过后写一个平台脚本（`apply-update.sh` / `.ps1`）并 detached 拉起，随即退出；脚本等本进程消失后备份旧包、替换 asar、解包 unpacked、补 `spawn-helper` 权限、重启。
+
+形态上没有其他选择：Squirrel 的 `Update.exe`、NSIS 安装器、AppImage 都靠**独立 helper 进程**在应用退出后换文件，运行中的 bundle 无法自我覆盖。electron-builder 官方对 `portable` 的判定就是 *"Auto-updates require manual implementation"*。
+
+注意：**装了旧版（补丁之前）的客户端没有这条 IPC**，需要用 `install-hermes-desktop-linux.sh` 或手动换一次 asar，之后才有按钮。
 
 ## 关键坑（踩过的）
 
