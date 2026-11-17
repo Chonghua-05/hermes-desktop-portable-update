@@ -40,11 +40,12 @@ cd "$WORKSPACE"
 
 TAG="${1:-${UPSTREAM_TAG:-}}"
 if [ -z "$TAG" ]; then
-  # Latest stable release tag: 0.x line only, prereleases/canary and the old
-  # calendar-versioned tags excluded.
+  # Latest stable release tag: the 0.x line only. Upstream also publishes
+  # calendar-versioned aliases (v2026.9.24 == 0.21.5); those sort ABOVE 0.x
+  # under -V, so pin the major to 0 instead of merely excluding pre-releases.
   TAG=$(git ls-remote --tags origin 'refs/tags/v*' \
     | sed -e 's|.*refs/tags/||' -e 's|\^{}$||' \
-    | grep -Ev '\-|\+' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
+    | grep -E '^v0\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
 fi
 [ -n "$TAG" ] || { echo "[build] cannot resolve upstream tag" >&2; exit 1; }
 
