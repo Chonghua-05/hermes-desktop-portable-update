@@ -13,13 +13,31 @@ import { PORTABLE_BUILD_TAG, PORTABLE_RELEASE_URL, PORTABLE_UPDATE_BASE } from '
 
 export { PORTABLE_BUILD_TAG, PORTABLE_RELEASE_URL, PORTABLE_UPDATE_BASE }
 
+/** `manifest.json` shipped with every release: everything the updater needs. */
+export const PORTABLE_MANIFEST_URL = `${PORTABLE_RELEASE_URL}/latest/download/manifest.json`
+
 export interface PortableManifest {
-  /** Release tag, e.g. `asar-v0.23.1`. */
+  /** Release tag, e.g. `asar-v0.23.2`. */
   tag: string
-  /** Upstream version, e.g. `0.23.1`. */
+  /** Upstream version, e.g. `0.23.2`. */
   version: string
   builtAt: string
   artifactUrl: string
+  /** sha256 of app.asar; empty when only the release API answered. */
+  asarSha256: string
+  unpackedUrl: string
+  unpackedSha256: string
+}
+
+interface ReleaseManifest {
+  tag?: string
+  upstreamTag?: string
+  version?: string
+  builtAt?: string
+  sha256?: string
+  unpackedSha256?: string
+  artifactUrl?: string
+  unpackedUrl?: string
 }
 
 interface GitHubRelease {
@@ -28,12 +46,40 @@ interface GitHubRelease {
   assets?: { name?: string; browser_download_url?: string }[]
 }
 
-/** `asar-v0.23.1` / `v0.23.1` -> `0.23.1` */
+/** `asar-v0.23.2` / `v0.23.2` -> `0.23.2` */
 function stripTagPrefix(tag: string): string {
   return tag.replace(/^asar-/, '').replace(/^v/, '')
 }
 
+/**
+ * Reads the release manifest, which carries the checksums and asset URLs the
+ * in-app updater verifies before writing anything. Falls back to the release
+ * API (version only, no checksums) so a manifest hiccup degrades to the manual
+ * path instead of hiding a newer version entirely.
+ */
 export async function fetchPortableManifest(): Promise<PortableManifest | null> {
+  try {
+    const res = await fetch(PORTABLE_MANIFEST_URL, { signal: AbortSignal.timeout(6000) })
+
+    if (res.ok) {
+      const manifest = (await res.json()) as ReleaseManifest
+
+      if (manifest.tag) {
+        return {
+          tag: manifest.tag,
+          version: manifest.version || stripTagPrefix(manifest.tag),
+          builtAt: manifest.builtAt ?? '',
+          artifactUrl: manifest.artifactUrl || `${PORTABLE_RELEASE_URL}/latest/download/app.asar`,
+          asarSha256: manifest.sha256 ?? '',
+          unpackedUrl: manifest.unpackedUrl || `${PORTABLE_RELEASE_URL}/latest/download/app.asar.unpacked.tar.gz`,
+          unpackedSha256: manifest.unpackedSha256 ?? ''
+        }
+      }
+    }
+  } catch {
+    // fall through to the release API probe
+  }
+
   try {
     const res = await fetch(PORTABLE_UPDATE_BASE, {
       headers: { Accept: 'application/vnd.github+json' },
@@ -55,7 +101,10 @@ export async function fetchPortableManifest(): Promise<PortableManifest | null> 
       tag: release.tag_name,
       version: stripTagPrefix(release.tag_name),
       builtAt: release.published_at ?? '',
-      artifactUrl: asset.browser_download_url
+      artifactUrl: asset.browser_download_url,
+      asarSha256: '',
+      unpackedUrl: `${PORTABLE_RELEASE_URL}/latest/download/app.asar.unpacked.tar.gz`,
+      unpackedSha256: ''
     }
   } catch {
     return null

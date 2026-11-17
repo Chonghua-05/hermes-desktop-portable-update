@@ -58,6 +58,7 @@ git apply --whitespace=nowarn "$PATCH_DIR/portable-update.patch" \
   || { echo "[build] portable patch failed to apply (upstream changed?)" >&2; exit 1; }
 cp "$PATCH_DIR/files/portable-updates.ts" apps/desktop/src/lib/
 cp "$PATCH_DIR/files/portable-update-panel.tsx" apps/desktop/src/app/
+cp "$PATCH_DIR/files/portable-update-apply.ts" apps/desktop/electron/
 echo "[build] portable patch applied"
 
 # Bake build identity + update origin into the bundle: package.json version is

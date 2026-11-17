@@ -1,5 +1,55 @@
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 38b1f73..5a4821f 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -56,6 +56,7 @@ import {
+ } from './api-transport'
+ import { appIconCandidates, resolveAppIcon, shouldOverrideDockIcon } from './app-icon'
+ import { stageAppInstallerFile } from './app-installer-file'
++import { applyPortableUpdate, prunePortableUpdateBackups } from './portable-update-apply'
+ import { createAppRelauncher, relaunchApp } from './app-relaunch'
+ import {
+   appVersionInfo,
+@@ -16853,6 +16854,23 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
+   }))
+ )
+ 
++// Portable (green build) self-update. Main downloads the release asset and
++// verifies its sha256, then a DETACHED helper swaps the asar once this process
++// is gone and relaunches it — the shape Squirrel/NSIS installers use, because
++// nothing can overwrite a bundle that is currently mapped.
++ipcMain.handle('hermes:portable-update:apply', async (_event, payload) => {
++  void prunePortableUpdateBackups().catch(() => undefined)
++
++  const result = await applyPortableUpdate(payload ?? {})
++
++  if (result.ok) {
++    // Give the renderer a beat to paint the "restarting" state before we go.
++    setTimeout(() => void exitAfterBackendShutdown(0), 1200)
++  }
++
++  return result
++})
++
+ // About ▸ Updates channel selector; source checkouts only (packages bake their channel).
+ ipcMain.handle('hermes:updates:channel:set', async (_event, name: unknown): Promise<UpdaterStatusWire> => {
+   assertSourceUpdateChannel(INSTALL_STAMP)
+diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
+index 3fe6618..5ed0429 100644
+--- a/apps/desktop/electron/preload.ts
++++ b/apps/desktop/electron/preload.ts
+@@ -731,6 +731,9 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+       return () => ipcRenderer.removeListener('hermes:updates:metric:pending', listener)
+     }
+   },
++  portableUpdate: {
++    apply: payload => ipcRenderer.invoke('hermes:portable-update:apply', payload)
++  },
+   desktopMetrics: {
+     setEnabled: (on, profile) => ipcRenderer.invoke('hermes:desktop-metrics:set-enabled', on, profile),
+     takeRendererCrashes: () => ipcRenderer.invoke('hermes:desktop-metrics:crash:take'),
 diff --git a/apps/desktop/src/app/updates-overlay.tsx b/apps/desktop/src/app/updates-overlay.tsx
-index 869f000ebd..97a475c0e1 100644
+index 869f000..97a475c 100644
 --- a/apps/desktop/src/app/updates-overlay.tsx
 +++ b/apps/desktop/src/app/updates-overlay.tsx
 @@ -39,6 +39,7 @@ import {
@@ -40,8 +90,30 @@ index 869f000ebd..97a475c0e1 100644
    // Everything that is NOT the install pitch — unsupported, check error, and
    // already-latest — is exactly the About page's state: render the shared
    // hero + status card so the two surfaces cannot drift. The card owns the
+diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
+index 27f9da1..7da4349 100644
+--- a/apps/desktop/src/global.d.ts
++++ b/apps/desktop/src/global.d.ts
+@@ -460,6 +460,17 @@ declare global {
+       endPreviewGuestActivity?: (token: number) => Promise<void>
+       executePreviewGuestScript?: (token: number, code: string) => Promise<unknown>
+       openExternal: (url: string) => Promise<void>
++      /** Portable green build: main downloads + verifies the release, then a
++       *  detached helper swaps the asar after the app exits and relaunches. */
++      portableUpdate?: {
++        apply: (payload: {
++          asarUrl: string
++          unpackedUrl: string
++          sha256: string
++          unpackedSha256: string
++          version?: string
++        }) => Promise<{ ok: boolean; error?: string; message?: string }>
++      }
+       onExternalOpenFailed?: (callback: (payload: ExternalOpenFailedPayload) => void) => () => void
+       /** The free tier's browser challenge (electron/challenge-window.ts): load
+        *  the account service's page in a hidden window, revealed only if the
 diff --git a/apps/desktop/src/store/updates.ts b/apps/desktop/src/store/updates.ts
-index a25f4d14c1..1ef13aea2f 100644
+index a25f4d1..1ef13ae 100644
 --- a/apps/desktop/src/store/updates.ts
 +++ b/apps/desktop/src/store/updates.ts
 @@ -19,6 +19,7 @@ import type {
