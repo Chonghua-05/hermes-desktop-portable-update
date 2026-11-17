@@ -95,6 +95,30 @@ corepack pnpm dlx @electron/asar pack release/asar-src "$ART/$TAG/app.asar" \
   --unpack-dir "dist/node_modules"
 [ -d "$ART/$TAG/app.asar.unpacked/dist/node_modules/node-pty" ] \
   || { echo "[build] app.asar.unpacked missing node-pty" >&2; exit 1; }
+
+# CI compiles pty.node for Linux only, so a Windows green build would hit a
+# Linux ELF in build/Release and fail to open a terminal. node-pty's loader
+# walks build/Release -> build/Debug -> prebuilds/<platform>-<arch> and keeps
+# the first one that actually loads, so carrying the win32 prebuilds (already
+# in the npm tarball: conpty.node, conpty.dll, OpenConsole.exe, winpty) is what
+# makes the Windows build's terminal work too.
+NPT_UNPACK="$ART/$TAG/app.asar.unpacked/dist/node_modules/node-pty"
+NPT_PREBUILDS_SRC=""
+for cand in node_modules/node-pty/prebuilds ../../node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds; do
+  if [ -d "$cand" ]; then NPT_PREBUILDS_SRC="$cand"; break; fi
+done
+[ -n "$NPT_PREBUILDS_SRC" ] \
+  || { echo "[build] node-pty prebuilds not found; Windows terminal would be broken" >&2; exit 1; }
+for plat in win32-x64 win32-arm64; do
+  [ -d "$NPT_PREBUILDS_SRC/$plat" ] || continue
+  mkdir -p "$NPT_UNPACK/prebuilds/$plat"
+  cp -r "$NPT_PREBUILDS_SRC/$plat/." "$NPT_UNPACK/prebuilds/$plat/"
+done
+find "$NPT_UNPACK/prebuilds" -name '*.pdb' -delete
+[ -f "$NPT_UNPACK/prebuilds/win32-x64/conpty.node" ] \
+  || { echo "[build] win32 conpty.node missing after prebuilds copy" >&2; exit 1; }
+echo "[build] node-pty prebuilds: $(find "$NPT_UNPACK/prebuilds" -type f | wc -l) files, $(du -sh "$NPT_UNPACK/prebuilds" | cut -f1)"
+
 tar -czf "$ART/$TAG/app.asar.unpacked.tar.gz" -C "$ART/$TAG" app.asar.unpacked
 
 APP_VERSION="${TAG#v}"

@@ -15,12 +15,50 @@ on:
         description: 'publish a GitHub release'
         type: boolean
         default: true
+  schedule:
+    # Daily look for a new upstream 0.x release; probe skips the build when
+    # that version is already published, so an idle day costs seconds only.
+    - cron: '0 3 * * *'
 
 permissions:
   contents: write
 
 jobs:
+  probe:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      build: ${{ steps.pick.outputs.build }}
+    steps:
+      - name: Pick upstream tag
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: NousResearch/hermes-agent
+          REQUESTED_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED_TAG:-}" ]; then
+            TAG="$REQUESTED_TAG"
+          else
+            # 0.x line only: upstream's calendar aliases (v2026.9.24 == 0.21.5)
+            # match vX.Y.Z and win under sort -V, so pin the major.
+            TAG=$(git ls-remote --tags "https://github.com/$UPSTREAM_REPO.git" 'refs/tags/v*' \
+              | sed -e 's|.*refs/tags/||' -e 's|\^{}$||' \
+              | grep -E '^v0\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
+          fi
+          [ -n "$TAG" ] || { echo "cannot resolve upstream tag" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -z "${REQUESTED_TAG:-}" ] && gh release view "asar-$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "asar-$TAG already published; nothing to build"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: probe
+    if: needs.probe.outputs.build == 'true'
     # node-pty has no Linux prebuild: it compiles against the runner's glibc,
     # and a binary from a newer image fails to dlopen on older distros
     # ("GLIBC_2.42 not found"). ubuntu-22.04 (glibc 2.35) keeps the artifact
@@ -56,7 +94,7 @@ jobs:
         env:
           WORKSPACE: ${{ runner.temp }}/hermes-agent
           ART: ${{ github.workspace }}/art
-          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          UPSTREAM_TAG: ${{ needs.probe.outputs.tag }}
           RELEASE_SLUG: ${{ github.repository }}
         run: bash bin/build-hermes-desktop-asar.sh
 
@@ -74,11 +112,16 @@ jobs:
           cp bin/install-hermes-desktop-linux.sh release/install-hermes-desktop-linux.sh
           ls -l release
           echo "sha256: $(sha256sum release/app.asar | cut -d' ' -f1)"
-          PTY=$(find "art/$TAG/app.asar.unpacked" -name pty.node | head -1)
+          # build/Release is the Linux binary CI compiled; prebuilds/win32-* are
+          # the PE ones shipped for the Windows green build.
+          PTY=$(find "art/$TAG/app.asar.unpacked" -path '*/build/Release/pty.node' | head -1)
           echo "pty.node glibc floor: $(objdump -T "$PTY" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          WINPTY=$(find "art/$TAG/app.asar.unpacked" -path '*prebuilds/win32-x64/conpty.node' | head -1)
+          [ -n "$WINPTY" ] || { echo "win32 prebuilds missing from unpacked" >&2; exit 1; }
+          echo "win32 prebuilds: $(du -sh "$(dirname "$WINPTY")" | cut -f1) ($(file -b "$WINPTY"))"
 
       - name: Publish release
-        if: inputs.publish
+        if: github.event_name == 'schedule' || inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REL: ${{ steps.stage.outputs.rel }}

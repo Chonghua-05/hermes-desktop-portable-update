@@ -45,15 +45,18 @@ asar 用 manifest 里的 `sha256` 校验；拿不到 manifest 时跳过校验并
 
 ## 构建（GitHub Actions）
 
-Actions → **Build app.asar** → Run workflow：
+两条触发路径：**每天 03:00 UTC 的 schedule**（自动跟进上游最新的 `v0.x.y`；若该版本已发过 Release 直接跳过，空闲日只花几秒），以及 Actions → **Build app.asar** → Run workflow 手动跑：
 
 - `upstream_tag`：要打包的上游 tag，留空 = 最新稳定版（只认 `v0.x.y`，排除 canary 与旧日期线）；
-- `publish`：是否发布 Release（关掉就只留 workflow artifact）。
+- `publish`：是否发布 Release（关掉就只留 workflow artifact；schedule 触发时恒为发布）。
 
-产物是一个 Release（tag 形如 `asar-v0.23.1`），含三个附件：
+`probe` job 先把 tag 解析出来并判断是否已有 `asar-<tag>` Release，`build` job 只在需要时才跑。
+
+产物是一个 Release（tag 形如 `asar-v0.23.2`），含四个附件：
 
 - `app.asar`
-- `manifest.json`（tag / upstreamTag / version / builtAt / sha256 / size）
+- `app.asar.unpacked.tar.gz`（原生模块，必须一起落地）
+- `manifest.json`（tag / upstreamTag / version / builtAt / sha256 / unpackedSha256 / size）
 - `install-hermes-desktop-linux.sh`
 
 并把该 Release 标记为 latest，所以 `releases/latest/download/...` 这些 URL 永远指向最新版本，不需要随版本改。
@@ -92,7 +95,7 @@ bin/build-hermes-desktop-asar.sh v0.23.1    # 指定 tag
 1. **探测必须在入口处执行**：Electron 主进程 `hermes:updates:check` 会自己 catch 异常并**正常返回** `{error:'check-failed'}`，渲染层 catch 永不触发，所以探测放在 `checkUpdates` 入口而不是 catch 里。
 2. **pnpm 走 corepack**：`corepack pnpm`，并设 `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`；非交互环境（systemd/CI）的 PATH 要给全 `NODE_BIN_DIR`。
 3. **tag 解析**：`git ls-remote --tags` 剥 `^{}` 用 `sed 's|\^{}$||'`（BRE 里 `\{` 是区间语法，写成 `\{\}` 会报错）。
-4. **asar 与 Electron 版本**：asar 里的原生模块（`node-pty`）随构建机平台走。Linux 客户端要用 Linux 上构建/安装的依赖，Electron 大版本与构建时一致（44.x）。
+4. **asar 与 Electron 版本**：asar 里的原生模块（`node-pty`）随构建机平台走。CI 在 ubuntu 上只编出 Linux 的 `pty.node`，Windows 客户端要靠 `node-pty` 自带的 win32 prebuilds：`lib/utils.js` 的加载顺序是 `build/Release` → `build/Debug` → `prebuilds/<platform>-<arch>`，逐个 try/catch，所以把 npm 包里的 `prebuilds/win32-*`（conpty.node、conpty.dll、OpenConsole.exe、winpty）一起塞进 `app.asar.unpacked`，Windows 上就会跳过加载失败的 Linux ELF 落到 prebuilds。**别用 `find -name pty.node | head -1` 取二进制做检查**：加了 prebuilds 后会先命中 PE 文件，`objdump` 直接报错——按 `*/build/Release/pty.node` 这种完整路径取。
 5. **Chromium 沙箱**：解包版 `chrome-sandbox` 必须是 `root:root` + `4755`，否则只能 `--no-sandbox`。安装脚本会设置它。
 6. **Wayland**：Electron 42+ 默认 `--ozone-platform=auto`，启动器在 Wayland 会话下显式给 `--ozone-platform=wayland`。
 
